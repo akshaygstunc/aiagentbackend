@@ -1,0 +1,59 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  RUNNING
+  PAUSED
+  COMPLETED
+}
+
+enum ContactStatus {
+  PENDING
+  QUEUED
+  CALLING
+  COMPLETED
+  FAILED
+  SKIPPED
+}
+
+model Campaign {
+  id              String         @id @default(cuid())
+  name            String
+  bolnaAgentId    String
+  fromNumber      String?
+  timezone        String         @default("Asia/Kolkata")
+  dailyStartTime  String
+  dailyEndTime    String
+  startDate       DateTime
+  endDate         DateTime
+  status          CampaignStatus @default(DRAFT)
+  isPaused        Boolean        @default(false)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  contacts        Contact[]
+}
+
+model Contact {
+  id              String        @id @default(cuid())
+  campaignId      String
+  name            String?
+  phone           String
+  email           String?
+  company         String?
+  metadataJson    String?
+  status          ContactStatus @default(PENDING)
+  scheduledAt     DateTime?
+  bolnaExecutionId String?
+  lastError       String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  campaign        Campaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+}
