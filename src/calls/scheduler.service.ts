@@ -15,6 +15,8 @@ export class CampaignSchedulerService {
 
   @Cron(CronExpression.EVERY_10_SECONDS)
   async processPendingCalls() {
+    this.logger.log("Cron fired");
+
     const campaigns = await this.prisma.campaign.findMany({
       where: { isPaused: false, status: { in: ["SCHEDULED", "RUNNING"] } },
       include: { contacts: { where: { status: "PENDING" }, take: 5 } },
@@ -22,13 +24,24 @@ export class CampaignSchedulerService {
 
     for (const campaign of campaigns) {
       const now = dayjs();
+
       const withinDateRange =
         now.isAfter(dayjs(campaign.startDate)) &&
         now.isBefore(dayjs(campaign.endDate).endOf("day"));
+
       const currentTime = now.format("HH:mm");
+      const start = campaign.dailyStartTime;
+      const end = campaign.dailyEndTime;
+
       const withinWindow =
-        currentTime >= campaign.dailyStartTime &&
-        currentTime <= campaign.dailyEndTime;
+        start <= end
+          ? currentTime >= start && currentTime <= end
+          : currentTime >= start || currentTime <= end;
+
+      this.logger.log(
+        `Campaign ${campaign.name} | current=${currentTime} | start=${start} | end=${end} | dateRange=${withinDateRange} | window=${withinWindow}`,
+      );
+
       if (!withinDateRange || !withinWindow) continue;
 
       await this.prisma.campaign.update({
@@ -40,11 +53,15 @@ export class CampaignSchedulerService {
         try {
           await this.callsService.triggerBolnaCall(contact.id);
         } catch (error: any) {
-          console.log(error.response);
-          this.logger.error(`Call failed for ${contact.id}: ${error.response}`);
+          const errText = error?.response?.data
+            ? JSON.stringify(error.response.data)
+            : error?.message || "Unknown error";
+
+          this.logger.error(`Call failed for ${contact.id}: ${errText}`);
+
           await this.prisma.contact.update({
             where: { id: contact.id },
-            data: { status: "FAILED", lastError: error.message },
+            data: { status: "FAILED", lastError: errText },
           });
         }
       }
