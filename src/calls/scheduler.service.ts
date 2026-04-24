@@ -1,9 +1,20 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { Cron, CronExpression } from "@nestjs/schedule";
-import dayjs = require("dayjs");
+import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc";
+import timezone from "dayjs/plugin/timezone";
+import customParseFormat = require("dayjs/plugin/customParseFormat");
+// // 🔥 ADD THESE
+// import utc from "dayjs/plugin/utc";
+// import timezone from "dayjs/plugin/timezone";
+
 import { PrismaService } from "../prisma/prisma.service";
 import { CallsService } from "./calls.service";
 
+// 🔥 ENABLE PLUGINS
+dayjs?.extend(utc);
+dayjs?.extend(timezone);
+dayjs?.extend(customParseFormat);
 @Injectable()
 export class CampaignSchedulerService {
   private readonly logger = new Logger(CampaignSchedulerService.name);
@@ -23,15 +34,31 @@ export class CampaignSchedulerService {
     });
 
     for (const campaign of campaigns) {
-      const now = dayjs();
+      // ✅ FORCE IST TIME
+      const now = dayjs().tz("Asia/Kolkata");
 
+      // ✅ DATE CHECK (IST SAFE)
       const withinDateRange =
-        now.isAfter(dayjs(campaign.startDate)) &&
-        now.isBefore(dayjs(campaign.endDate).endOf("day"));
+        now.isSame(dayjs(campaign.startDate), "day") ||
+        now.isAfter(dayjs(campaign.startDate));
 
+      const beforeEnd = now.isBefore(dayjs(campaign.endDate).endOf("day"));
+
+      if (!withinDateRange || !beforeEnd) {
+        this.logger.log(`❌ Date mismatch for ${campaign.name}`);
+        continue;
+      }
+
+      // ✅ TIME CHECK (IST SAFE)
       const currentTime = now.format("HH:mm");
-      const start = campaign.dailyStartTime;
-      const end = campaign.dailyEndTime;
+
+      // ensure both are HH:mm
+      const start = dayjs(campaign.dailyStartTime, ["HH:mm", "hh:mm A"]).format(
+        "HH:mm",
+      );
+      const end = dayjs(campaign.dailyEndTime, ["HH:mm", "hh:mm A"]).format(
+        "HH:mm",
+      );
 
       const withinWindow =
         start <= end
@@ -39,16 +66,21 @@ export class CampaignSchedulerService {
           : currentTime >= start || currentTime <= end;
 
       this.logger.log(
-        `Campaign ${campaign.name} | current=${currentTime} | start=${start} | end=${end} | dateRange=${withinDateRange} | window=${withinWindow}`,
+        `Campaign ${campaign.name} | IST=${currentTime} | start=${start} | end=${end} | dateRange=${withinDateRange} | window=${withinWindow}`,
       );
 
-      if (!withinDateRange || !withinWindow) continue;
+      if (!withinWindow) {
+        this.logger.log(`❌ Time window mismatch for ${campaign.name}`);
+        continue;
+      }
 
+      // ✅ MARK RUNNING
       await this.prisma.campaign.update({
         where: { id: campaign.id },
         data: { status: "RUNNING" },
       });
 
+      // ✅ PROCESS CONTACTS
       for (const contact of campaign.contacts) {
         try {
           await this.callsService.triggerBolnaCall(contact.id);
